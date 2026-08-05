@@ -6,7 +6,7 @@ import logging
 from datetime import datetime, timezone
 
 from app.db import connect
-from app.services import downloader, extractor, llm, statuses
+from app.services import dedupe, downloader, extractor, llm, statuses
 from app.services.catalog import CATALOG
 
 logger = logging.getLogger(__name__)
@@ -90,6 +90,10 @@ async def ingest_issue(url: str, db_path: str | None = None) -> dict:
         for idea in found:
             if idea.get("ticker") or idea.get("company"):
                 ideas.append(idea)
+
+    # A long pitch spanning multiple sections gets re-extracted as one
+    # fragment per section; collapse same-author fragments before insert.
+    ideas = dedupe.dedupe_new_ideas(ideas)
 
     conn = await connect(db_path)
     try:

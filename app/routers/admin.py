@@ -1,9 +1,11 @@
 import asyncio
 import json
 import logging
+import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
 
 from app.config import get_settings
@@ -16,8 +18,27 @@ router = APIRouter(prefix="/admin")
 templates = Jinja2Templates(directory="app/templates")
 templates.env.globals["prefix"] = get_settings().root_path
 
+_basic_auth = HTTPBasic()
 
-@router.get("")
+
+def require_admin(credentials: HTTPBasicCredentials = Depends(_basic_auth)) -> bool:
+    """Guards the management surface (ingest/backfill/score-latest/discover and
+    the /admin page itself). Username is ignored, only the password matters.
+
+    /admin/issues/{id}/analyze and /admin/jobs/latest stay unauthenticated —
+    they're invoked from public issue/dashboard pages, not the admin page.
+    """
+    configured = get_settings().admin_password
+    if not configured or not secrets.compare_digest(credentials.password, configured):
+        raise HTTPException(
+            status_code=401,
+            detail="Unauthorized",
+            headers={"WWW-Authenticate": 'Basic realm="Admin"'},
+        )
+    return True
+
+
+@router.get("", dependencies=[Depends(require_admin)])
 async def admin_page(request: Request, db=Depends(get_db)):
     ingested = {
         r["source_url"]
@@ -44,7 +65,7 @@ async def latest_job(kind: str):
     return job or {"status": "none"}
 
 
-@router.post("/ingest")
+@router.post("/ingest", dependencies=[Depends(require_admin)])
 async def ingest_issue(request: Request, db=Depends(get_db)):
     form = await request.form()
     url = (form.get("url") or "").strip()
@@ -61,7 +82,7 @@ async def ingest_issue(request: Request, db=Depends(get_db)):
     return RedirectResponse(f"{get_settings().root_path}/issues/{result['issue_id']}", status_code=303)
 
 
-@router.post("/backfill")
+@router.post("/backfill", dependencies=[Depends(require_admin)])
 async def backfill():
     if await jobs.is_job_running("backfill"):
         return {"ok": False, "error": "a backfill is already running"}
@@ -122,7 +143,7 @@ async def _run_analyze(job_id: int, issue_id: int) -> None:
         await jobs.update_job(job_id, status="failed", note={"issue_id": issue_id, "error": str(exc)})
 
 
-@router.post("/score-latest")
+@router.post("/score-latest", dependencies=[Depends(require_admin)])
 async def score_latest():
     """Run best-pick scoring for the most recent issue and persist picks."""
     conn = await connect()
@@ -168,7 +189,7 @@ async def score_latest():
     return {"ok": True, "picks": len(picks), "issue_id": issue_id}
 
 
-@router.get("/discover")
+@router.get("/discover", dependencies=[Depends(require_admin)])
 async def discover():
     candidates = await discovery.scan_mirror_archive()
     return {"candidates": candidates}

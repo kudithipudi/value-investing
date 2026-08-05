@@ -15,6 +15,46 @@ async def test_admin_200(client):
     assert resp.status_code == 200
 
 
+async def test_admin_requires_auth(client):
+    resp = client.get("/admin", auth=None)
+    assert resp.status_code == 401
+
+
+async def test_admin_rejects_wrong_password(client):
+    resp = client.get("/admin", auth=("admin", "wrong-password"))
+    assert resp.status_code == 401
+
+
+async def test_admin_ingest_requires_auth(client):
+    resp = client.post("/admin/ingest", data={"url": "https://example.com/x.pdf"}, auth=None)
+    assert resp.status_code == 401
+
+
+async def test_admin_backfill_requires_auth(client):
+    resp = client.post("/admin/backfill", auth=None)
+    assert resp.status_code == 401
+
+
+async def test_analyze_and_jobs_latest_are_public(client, tmp_path):
+    """Invoked from the public issue page, not the admin page — must not
+    require the admin password."""
+    db_path = tmp_path / "app-test.db"
+    await init_db(str(db_path))
+    conn = await connect(str(db_path))
+    await conn.execute(
+        "INSERT INTO issues (source_url, title, status) VALUES ('http://x/9.pdf', 'T9', 'parsed')"
+    )
+    await conn.commit()
+    issue_id = (await conn.execute_fetchall("SELECT last_insert_rowid() AS id"))[0]["id"]
+    await conn.close()
+
+    resp = client.post(f"/admin/issues/{issue_id}/analyze", auth=None)
+    assert resp.status_code == 200
+
+    resp = client.get("/admin/jobs/latest?kind=analyze", auth=None)
+    assert resp.status_code == 200
+
+
 async def test_issue_detail_404_styled(client):
     resp = client.get("/issues/999")
     assert resp.status_code == 404

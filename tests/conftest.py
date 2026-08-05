@@ -11,6 +11,7 @@ from app.config import get_settings
 from app.db import connect, init_db
 
 TEST_DB = Path("/tmp/opencode/value-investing-test.db")
+TEST_ADMIN_PASSWORD = "test-admin-password"
 
 
 @pytest.fixture(autouse=True)
@@ -58,6 +59,7 @@ async def client(tmp_path, monkeypatch):
     db_path = tmp_path / "app-test.db"
     monkeypatch.setenv("DB_PATH", str(db_path))
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setenv("ADMIN_PASSWORD", TEST_ADMIN_PASSWORD)
     from app.db import init_db
     await init_db(str(db_path))
 
@@ -65,4 +67,7 @@ async def client(tmp_path, monkeypatch):
     from app.main import app
     from fastapi.testclient import TestClient
     with TestClient(app) as tc:
+        # Applied to every request; harmless on public routes, satisfies the
+        # HTTP Basic auth required by the protected /admin/* routes.
+        tc.auth = ("admin", TEST_ADMIN_PASSWORD)
         yield tc

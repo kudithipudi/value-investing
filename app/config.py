@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     db_path: str = "data/value-investing.db"
     pdf_dir: str = "data/pdfs"
     openrouter_api_key: str = ""
+    admin_password: str = ""
     llm_model: str = "openai/gpt-4o-mini"
     llm_temperature: float = 0.1
     llm_timeout: int = 120
