@@ -5,7 +5,6 @@ import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
 
 from app.config import get_settings
@@ -18,28 +17,52 @@ router = APIRouter(prefix="/admin")
 templates = Jinja2Templates(directory="app/templates")
 templates.env.globals["prefix"] = get_settings().root_path
 
-_basic_auth = HTTPBasic()
+
+def _is_admin(request: Request) -> bool:
+    return bool(request.session.get("is_admin"))
 
 
-def require_admin(credentials: HTTPBasicCredentials = Depends(_basic_auth)) -> bool:
-    """Guards the management surface (ingest/backfill/score-latest/discover and
-    the /admin page itself). Username is ignored, only the password matters.
+def require_admin(request: Request) -> bool:
+    """Guards the management surface (ingest/backfill/score-latest/discover).
 
     /admin/issues/{id}/analyze and /admin/jobs/latest stay unauthenticated —
     they're invoked from public issue/dashboard pages, not the admin page.
     """
-    configured = get_settings().admin_password
-    if not configured or not secrets.compare_digest(credentials.password, configured):
-        raise HTTPException(
-            status_code=401,
-            detail="Unauthorized",
-            headers={"WWW-Authenticate": 'Basic realm="Admin"'},
-        )
+    if not _is_admin(request):
+        raise HTTPException(status_code=401, detail="Unauthorized — log in at /admin/login")
     return True
 
 
-@router.get("", dependencies=[Depends(require_admin)])
+@router.get("/login")
+async def login_page(request: Request):
+    if _is_admin(request):
+        return RedirectResponse(f"{get_settings().root_path}/admin", status_code=303)
+    return templates.TemplateResponse(request, "admin_login.html", {"error": False})
+
+
+@router.post("/login")
+async def login_submit(request: Request):
+    form = await request.form()
+    password = (form.get("password") or "").strip()
+    configured = get_settings().admin_password
+    if configured and secrets.compare_digest(password, configured):
+        request.session["is_admin"] = True
+        return RedirectResponse(f"{get_settings().root_path}/admin", status_code=303)
+    return templates.TemplateResponse(
+        request, "admin_login.html", {"error": True}, status_code=401
+    )
+
+
+@router.post("/logout")
+async def logout(request: Request):
+    request.session.clear()
+    return RedirectResponse(f"{get_settings().root_path}/admin/login", status_code=303)
+
+
+@router.get("")
 async def admin_page(request: Request, db=Depends(get_db)):
+    if not _is_admin(request):
+        return RedirectResponse(f"{get_settings().root_path}/admin/login", status_code=303)
     ingested = {
         r["source_url"]
         for r in await db.execute_fetchall("SELECT source_url FROM issues")

@@ -15,29 +15,55 @@ async def test_admin_200(client):
     assert resp.status_code == 200
 
 
-async def test_admin_requires_auth(client):
-    resp = client.get("/admin", auth=None)
+async def test_admin_login_page_200(anon_client):
+    resp = anon_client.get("/admin/login")
+    assert resp.status_code == 200
+    assert "Admin login" in resp.text
+
+
+async def test_admin_redirects_anonymous_to_login(anon_client):
+    resp = anon_client.get("/admin", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"].endswith("/admin/login")
+
+
+async def test_admin_rejects_wrong_password(anon_client):
+    resp = anon_client.post("/admin/login", data={"password": "wrong-password"})
+    assert resp.status_code == 401
+    assert "Wrong password" in resp.text
+
+
+async def test_admin_login_then_page_200(anon_client):
+    from tests.conftest import TEST_ADMIN_PASSWORD
+
+    login = anon_client.post(
+        "/admin/login", data={"password": TEST_ADMIN_PASSWORD}, follow_redirects=False
+    )
+    assert login.status_code == 303
+    resp = anon_client.get("/admin")
+    assert resp.status_code == 200
+
+
+async def test_admin_logout_clears_session(client):
+    assert client.get("/admin").status_code == 200
+    client.post("/admin/logout")
+    resp = client.get("/admin", follow_redirects=False)
+    assert resp.status_code == 303
+
+
+async def test_admin_ingest_requires_auth(anon_client):
+    resp = anon_client.post("/admin/ingest", data={"url": "https://example.com/x.pdf"})
     assert resp.status_code == 401
 
 
-async def test_admin_rejects_wrong_password(client):
-    resp = client.get("/admin", auth=("admin", "wrong-password"))
+async def test_admin_backfill_requires_auth(anon_client):
+    resp = anon_client.post("/admin/backfill")
     assert resp.status_code == 401
 
 
-async def test_admin_ingest_requires_auth(client):
-    resp = client.post("/admin/ingest", data={"url": "https://example.com/x.pdf"}, auth=None)
-    assert resp.status_code == 401
-
-
-async def test_admin_backfill_requires_auth(client):
-    resp = client.post("/admin/backfill", auth=None)
-    assert resp.status_code == 401
-
-
-async def test_analyze_and_jobs_latest_are_public(client, tmp_path):
+async def test_analyze_and_jobs_latest_are_public(anon_client, tmp_path):
     """Invoked from the public issue page, not the admin page — must not
-    require the admin password."""
+    require an admin login."""
     db_path = tmp_path / "app-test.db"
     await init_db(str(db_path))
     conn = await connect(str(db_path))
@@ -48,10 +74,10 @@ async def test_analyze_and_jobs_latest_are_public(client, tmp_path):
     issue_id = (await conn.execute_fetchall("SELECT last_insert_rowid() AS id"))[0]["id"]
     await conn.close()
 
-    resp = client.post(f"/admin/issues/{issue_id}/analyze", auth=None)
+    resp = anon_client.post(f"/admin/issues/{issue_id}/analyze")
     assert resp.status_code == 200
 
-    resp = client.get("/admin/jobs/latest?kind=analyze", auth=None)
+    resp = anon_client.get("/admin/jobs/latest?kind=analyze")
     assert resp.status_code == 200
 
 

@@ -57,11 +57,14 @@ async def db(tmp_path):
 
 
 @pytest_asyncio.fixture
-async def client(tmp_path, monkeypatch):
+async def anon_client(tmp_path, monkeypatch):
+    """A TestClient with no admin session — for exercising what a visitor who
+    hasn't logged in can and can't reach."""
     db_path = tmp_path / "app-test.db"
     monkeypatch.setenv("DB_PATH", str(db_path))
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     monkeypatch.setenv("ADMIN_PASSWORD", TEST_ADMIN_PASSWORD)
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
     from app.db import init_db
     await init_db(str(db_path))
 
@@ -69,7 +72,15 @@ async def client(tmp_path, monkeypatch):
     from app.main import app
     from fastapi.testclient import TestClient
     with TestClient(app) as tc:
-        # Applied to every request; harmless on public routes, satisfies the
-        # HTTP Basic auth required by the protected /admin/* routes.
-        tc.auth = ("admin", TEST_ADMIN_PASSWORD)
         yield tc
+
+
+@pytest_asyncio.fixture
+async def client(anon_client):
+    """A TestClient already logged in to /admin (session cookie carries over
+    to every subsequent request, same as a real browser)."""
+    resp = anon_client.post(
+        "/admin/login", data={"password": TEST_ADMIN_PASSWORD}, follow_redirects=False
+    )
+    assert resp.status_code == 303
+    return anon_client

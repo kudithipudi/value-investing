@@ -46,12 +46,18 @@ async def ingest_missing() -> list[dict]:
     return [{"url": url, **r} for (url, _), r in zip(jobs, results)]
 
 
-async def analyze_all() -> dict:
+async def analyze_all(all_issues: bool = False) -> dict:
+    """Analyze issues that aren't analyzed yet, or every issue when
+    `all_issues` is set (e.g. after a change to the verdict/price logic that
+    should be applied retroactively)."""
     conn = await connect()
     try:
-        parsed = await conn.execute_fetchall(
-            "SELECT id FROM issues WHERE status IN ('parsed','extracted')"
-        )
+        if all_issues:
+            parsed = await conn.execute_fetchall("SELECT id FROM issues")
+        else:
+            parsed = await conn.execute_fetchall(
+                "SELECT id FROM issues WHERE status IN ('parsed','extracted')"
+            )
     finally:
         await conn.close()
 
@@ -102,6 +108,7 @@ async def score_latest() -> dict:
 async def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--analyze", action="store_true", help="analyze parsed issues")
+    parser.add_argument("--all", action="store_true", help="with --analyze, re-analyze already-analyzed issues too")
     parser.add_argument("--picks", action="store_true", help="score best picks for latest issue")
     args = parser.parse_args()
 
@@ -113,7 +120,7 @@ async def main() -> None:
             logger.warning("Failed: %s %s", r["url"].split("/")[-1], r.get("error"))
 
     if args.analyze:
-        summary = await analyze_all()
+        summary = await analyze_all(all_issues=args.all)
         logger.info("Analyze: %d issues, %d ok, %d failed", summary["issues"], summary["ok"], len(summary["failed"]))
 
     if args.picks:

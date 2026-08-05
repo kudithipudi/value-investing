@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.sessions import SessionMiddleware
 
 from app.config import get_settings
 from app.db import init_db
@@ -31,6 +32,21 @@ settings = get_settings()
 app = FastAPI(lifespan=lifespan)
 _here = Path(__file__).resolve().parent
 app.mount("/static", StaticFiles(directory=str(_here / "static")), name="static")
+# Signs the admin login cookie. Falls back to admin_password so a fresh
+# checkout still runs, but a real deploy should set SESSION_SECRET in .env —
+# without a stable secret, every gunicorn restart would log everyone out.
+#
+# Deliberately left at the default cookie path "/" rather than root_path:
+# nginx strips /value-investing before proxying, so the app (and tests, which
+# talk to it directly) only ever sees bare paths like "/admin" — a cookie
+# scoped to "/value-investing" would never match those and the session would
+# silently never be sent back.
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=settings.session_secret or settings.admin_password or "dev-only-insecure-secret",
+    session_cookie="value_investing_session",
+    max_age=12 * 60 * 60,
+)
 templates = Jinja2Templates(directory="app/templates")
 templates.env.globals["prefix"] = settings.root_path
 

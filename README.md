@@ -86,7 +86,8 @@ listing page blocks bots, but PDFs are downloadable), or use the backfill button
 | `ROOT_PATH` | public sub-path, used for template URLs |
 | `DB_PATH` | override default `data/value-investing.db` |
 | `LLM_MODEL` | OpenRouter model id (default `openai/gpt-4o-mini`) |
-| `ADMIN_PASSWORD` | HTTP Basic auth password for `/admin/*` management routes (ingest, backfill, score-latest, discover). Unset = admin locked out entirely. |
+| `ADMIN_PASSWORD` | Login password for `/admin` (form at `/admin/login`), gating the management routes (ingest, backfill, score-latest, discover). Unset = admin locked out entirely. |
+| `SESSION_SECRET` | Signs the admin login session cookie. Falls back to `ADMIN_PASSWORD` if unset, but set a dedicated random value in production — without a stable secret, every restart logs everyone out. |
 
 ## Notes
 
