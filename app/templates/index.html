@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% block title %}Graham &amp; Doddsville Dashboard{% endblock %}
+{% block subtitle %}<span class="text-[11px] text-slate-500">Newsletter idea dashboard</span>{% endblock %}
+{% block body %}
+
+{% if latest_picks and latest_picks.picks %}
+<section>
+  <h2 class="text-lg font-bold mb-3">Best ideas to watch — {{ latest_picks.season }}</h2>
+  <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+    {% for pick in latest_picks.picks[:3] %}
+    <div class="rounded-xl border border-indigo-200 bg-white p-5 shadow-sm">
+      <div class="flex items-start justify-between">
+        <div>
+          <div class="text-2xl font-bold text-indigo-600">{{ pick.score|default(0) }}</div>
+          <div class="text-xs uppercase tracking-wider text-slate-400 mt-0.5">LLM score</div>
+        </div>
+        <span class="inline-flex items-center px-2 py-1 rounded-md text-xs font-semibold
+          {% if pick.action == 'buy' %}bg-emerald-100 text-emerald-800
+          {% elif pick.action == 'avoid' %}bg-rose-100 text-rose-800
+          {% else %}bg-amber-100 text-amber-800{% endif %}">
+          {{ pick.action|default('watch') }}
+        </span>
+      </div>
+      <div class="mt-3">
+        <div class="font-bold">{{ pick.ticker or pick.company or '—' }}</div>
+        <div class="text-sm text-slate-500">{{ pick.company or '' }}</div>
+      </div>
+      <p class="mt-2 text-sm text-slate-600">{{ pick.rationale or '' }}</p>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+<section>
+  <div class="flex items-center justify-between mb-3">
+    <h2 class="text-lg font-bold">Recent ideas</h2>
+    <span class="text-xs text-slate-500">{{ highlights|length }} shown ·
+      <a href="{{ prefix }}/ideas" class="text-indigo-600 hover:underline">search all</a> ·
+      <a href="{{ prefix }}/admin" class="text-indigo-600 hover:underline">manage</a></span>
+  </div>
+
+  {% if highlights %}
+  <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+    {% for h in highlights %}
+    <a href="{{ prefix }}/ideas/{{ h.id }}" class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm hover:border-indigo-300 transition block">
+      <div class="flex items-center justify-between gap-2">
+        <span class="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold
+          {% if h.kind == 'pitch' %}bg-indigo-100 text-indigo-800{% else %}bg-slate-100 text-slate-600{% endif %}">
+          {{ 'pitch' if h.kind == 'pitch' else 'position' }}
+        </span>
+        <span class="text-[11px] text-slate-400">{{ h.season }}</span>
+      </div>
+      <div class="mt-2 font-bold">{{ h.ticker }} <span class="font-normal text-slate-500 text-sm">{{ h.company }}</span></div>
+      <div class="flex items-center gap-2 mt-1 text-xs">
+        {% if h.return_pct is not none %}
+        <span class="font-mono font-semibold {% if h.return_pct >= 0 %}text-emerald-600{% else %}text-rose-600{% endif %}">{{ '%+.1f'|format(h.return_pct) }}%</span>
+        {% endif %}
+        {% if h.verdict %}
+        <span class="px-1.5 py-0.5 rounded text-[10px] font-semibold
+          {% if h.verdict == 'worked' %}bg-emerald-100 text-emerald-800
+          {% elif h.verdict == 'failed' %}bg-rose-100 text-rose-800
+          {% elif h.verdict == 'partial' %}bg-amber-100 text-amber-800
+          {% else %}bg-slate-100 text-slate-600{% endif %}">{{ h.verdict }}</span>
+        {% endif %}
+      </div>
+      <p class="mt-2 text-xs text-slate-600 line-clamp-2">{{ (h.thesis or '')[:200] }}</p>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="rounded-xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">
+    No ideas yet. Ingest a newsletter to get started.
+  </div>
+  {% endif %}
+</section>
+
+<section>
+  <h2 class="text-lg font-bold mb-3">Newsletters</h2>
+  <div class="rounded-xl border border-slate-200 bg-white overflow-hidden shadow-sm">
+    <table class="w-full text-sm">
+      <thead class="bg-slate-50 text-left text-xs uppercase tracking-wider text-slate-500">
+        <tr>
+          <th class="px-4 py-2.5">Season</th>
+          <th class="px-4 py-2.5 hidden sm:table-cell">Issue</th>
+          <th class="px-4 py-2.5">Status</th>
+          <th class="px-4 py-2.5"></th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100">
+        {% for issue in issues %}
+        <tr class="hover:bg-slate-50">
+          <td class="px-4 py-2.5"><a href="{{ prefix }}/issues/{{ issue.id }}" class="font-semibold text-indigo-600 hover:underline">{{ issue.title }}</a></td>
+          <td class="px-4 py-2.5 hidden sm:table-cell text-slate-500">{{ issue.issue_number or '—' }}</td>
+          <td class="px-4 py-2.5">
+            <span class="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold
+              {% if issue.status == 'analyzed' %}bg-emerald-100 text-emerald-800
+              {% elif issue.status in ('parsed','extracted') %}bg-amber-100 text-amber-800
+              {% elif issue.status in ('download_failed','extract_failed') %}bg-rose-100 text-rose-800
+              {% else %}bg-slate-100 text-slate-600{% endif %}">{{ issue.status }}</span>
+          </td>
+          <td class="px-4 py-2.5 text-right">
+            <a href="{{ prefix }}/issues/{{ issue.id }}" class="text-indigo-600 hover:underline text-xs">open</a>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="px-4 py-6 text-center text-slate-400">No newsletters ingested yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+{% endblock %}

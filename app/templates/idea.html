@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %}{{ idea.ticker or idea.company }} · Graham &amp; Doddsville{% endblock %}
+{% block breadcrumb %}
+<div class="flex items-center justify-between text-sm gap-4 flex-wrap">
+  <a href="{{ prefix }}/issues/{{ idea.issue_id }}" class="text-indigo-600 hover:underline">&larr; {{ idea.issue_title }}</a>
+  <div class="flex items-center gap-4">
+    {% if idea.prev_idea %}<a href="{{ prefix }}/ideas/{{ idea.prev_idea.id }}" class="text-slate-500 hover:text-indigo-600 transition">&larr; {{ idea.prev_idea.ticker or idea.prev_idea.company }}</a>{% endif %}
+    {% if idea.next_idea %}<a href="{{ prefix }}/ideas/{{ idea.next_idea.id }}" class="text-slate-500 hover:text-indigo-600 transition">{{ idea.next_idea.ticker or idea.next_idea.company }} &rarr;</a>{% endif %}
+  </div>
+</div>
+{% endblock %}
+{% block body %}
+
+<div>
+  <h1 class="text-2xl font-bold mt-1">{{ idea.company or idea.ticker }}</h1>
+  <div class="flex flex-wrap items-center gap-2 mt-1 text-sm">
+    <span class="font-mono font-bold">{{ idea.ticker or '—' }}</span>
+    <span class="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold
+      {% if idea.kind == 'pitch' %}bg-indigo-100 text-indigo-800{% else %}bg-slate-100 text-slate-600{% endif %}">{{ idea.kind }}</span>
+    {% if idea.direction %}<span class="text-[11px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-medium">{{ idea.direction }}</span>{% endif %}
+    {% if idea.author %}<span class="text-slate-500">{{ idea.author }}</span>{% endif %}
+  </div>
+</div>
+
+<div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+  <div class="md:col-span-2 space-y-6">
+    <section class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+      <h2 class="text-sm font-bold uppercase tracking-wider text-slate-500 mb-2">Thesis</h2>
+      <p class="text-sm text-slate-700 whitespace-pre-line">{{ idea.thesis or 'No thesis extracted.' }}</p>
+    </section>
+
+    <section class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+      <h2 class="text-sm font-bold uppercase tracking-wider text-slate-500 mb-2">Did it work?</h2>
+      {% if idea.verdicts %}
+      <div class="space-y-3">
+        {% for v in idea.verdicts %}
+        {% if v.kind == 'verdict' %}
+        <div class="flex items-center gap-2">
+          <span class="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-semibold
+            {% if v.verdict == 'worked' %}bg-emerald-100 text-emerald-800
+            {% elif v.verdict == 'failed' %}bg-rose-100 text-rose-800
+            {% elif v.verdict == 'partial' %}bg-amber-100 text-amber-800
+            {% else %}bg-slate-100 text-slate-600{% endif %}">{{ v.verdict }}</span>
+          <span class="text-xs text-slate-400">confidence: {{ v.confidence or 'low' }}</span>
+        </div>
+        <p class="text-sm text-slate-700">{{ v.explanation or '' }}</p>
+        {% endif %}
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="text-sm text-slate-500">Not analyzed yet — run analysis from the issue page.</p>
+      {% endif %}
+    </section>
+
+    <section class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+      <h2 class="text-sm font-bold uppercase tracking-wider text-slate-500 mb-2">Raw excerpt</h2>
+      <p class="text-xs text-slate-500 whitespace-pre-line">{{ idea.raw_excerpt or 'No raw excerpt stored.' }}</p>
+    </section>
+  </div>
+
+  <aside class="space-y-6">
+    <section class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+      <h2 class="text-sm font-bold uppercase tracking-wider text-slate-500 mb-3">Snapshot</h2>
+      <dl class="space-y-3 text-sm">
+        <div class="flex justify-between"><dt class="text-slate-500">Issue</dt><dd class="font-semibold">{{ idea.season }}</dd></div>
+        {% if idea.challenge %}<div class="flex justify-between"><dt class="text-slate-500">Challenge</dt><dd class="font-semibold text-right">{{ idea.challenge }}</dd></div>{% endif %}
+        {% if idea.price_at_pitch %}<div class="flex justify-between"><dt class="text-slate-500">Price at pitch</dt><dd class="font-mono font-semibold">${{ '%.2f'|format(idea.price_at_pitch) }}</dd></div>{% endif %}
+        {% if idea.pitch_date %}<div class="flex justify-between"><dt class="text-slate-500">Pitch date</dt><dd class="font-semibold">{{ idea.pitch_date }}</dd></div>{% endif %}
+        {% if idea.target_price %}<div class="flex justify-between"><dt class="text-slate-500">Target</dt><dd class="font-mono font-semibold">${{ '%.2f'|format(idea.target_price) }}</dd></div>{% endif %}
+        {% if idea.performance %}
+          {% if idea.performance.current_price %}
+          <div class="flex justify-between"><dt class="text-slate-500">Current</dt><dd class="font-mono font-semibold">${{ '%.2f'|format(idea.performance.current_price) }}</dd></div>
+          {% endif %}
+          {% if idea.performance.return_pct is not none %}
+          <div class="flex justify-between border-t border-slate-100 pt-2">
+            <dt class="text-slate-500">Return</dt>
+            <dd class="font-mono font-bold {% if idea.performance.return_pct >= 0 %}text-emerald-600{% else %}text-rose-600{% endif %}">{{ '%+.1f'|format(idea.performance.return_pct) }}%</dd>
+          </div>
+          {% endif %}
+        {% endif %}
+      </dl>
+    </section>
+
+    {% if idea.price_cache and idea.price_cache[0] %}
+    <section class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+      <h2 class="text-sm font-bold uppercase tracking-wider text-slate-500 mb-2">Latest price</h2>
+      <div class="text-2xl font-bold font-mono">${{ '%.2f'|format(idea.price_cache[0]) }}</div>
+      <div class="text-xs text-slate-400 mt-0.5">as of {{ idea.price_cache[1] }}</div>
+    </section>
+    {% endif %}
+  </aside>
+</div>
+
+{% endblock %}

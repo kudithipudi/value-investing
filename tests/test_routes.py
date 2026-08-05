@@ -1,0 +1,165 @@
+import asyncio
+import time
+
+from app.db import connect, init_db
+
+
+async def test_index_200(client):
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert "Graham" in resp.text
+
+
+async def test_admin_200(client):
+    resp = client.get("/admin")
+    assert resp.status_code == 200
+
+
+async def test_issue_detail_404_styled(client):
+    resp = client.get("/issues/999")
+    assert resp.status_code == 404
+    assert resp.headers["content-type"].startswith("text/html")
+    assert "Back to dashboard" in resp.text
+
+
+async def test_admin_404_stays_json(client):
+    resp = client.get("/admin/nope-not-a-route")
+    assert resp.status_code == 404
+    assert resp.headers["content-type"].startswith("application/json")
+
+
+async def test_issue_detail_200(client, tmp_path):
+    # Seed the app's DB (which lives at tmp_path/app-test.db per the client fixture).
+    db_path = tmp_path / "app-test.db"
+    await init_db(str(db_path))
+    conn = await connect(str(db_path))
+    await conn.execute(
+        "INSERT INTO issues (source_url, title, status) VALUES ('http://x/1.pdf', 'Test', 'parsed')"
+    )
+    await conn.commit()
+    await conn.close()
+
+    resp = client.get("/issues/1")
+    assert resp.status_code == 200
+
+
+async def test_admin_ingest_requires_url(client):
+    resp = client.post("/admin/ingest")
+    assert resp.status_code in (400, 307)
+
+
+async def test_admin_ingest_invalid_url(client):
+    resp = client.post("/admin/ingest", data={"url": "not-a-url"})
+    assert resp.status_code == 400
+
+
+async def test_ideas_search_200(client):
+    resp = client.get("/ideas")
+    assert resp.status_code == 200
+    assert "All ideas" in resp.text
+
+
+async def test_ideas_search_filters(client, tmp_path):
+    db_path = tmp_path / "app-test.db"
+    await init_db(str(db_path))
+    conn = await connect(str(db_path))
+    await conn.execute(
+        "INSERT INTO issues (source_url, title, status, issue_number) "
+        "VALUES ('http://x/2.pdf', 'Issue 2', 'parsed', 2)"
+    )
+    await conn.commit()
+    issue_id = (await conn.execute_fetchall("SELECT last_insert_rowid() AS id"))[0]["id"]
+    await conn.execute(
+        "INSERT INTO ideas (issue_id, kind, ticker, company, direction, thesis) "
+        "VALUES (?, 'pitch', 'ACME', 'Acme Corp', 'long', 'cheap')",
+        (issue_id,),
+    )
+    await conn.commit()
+    await conn.close()
+
+    resp = client.get("/ideas?q=ACME")
+    assert resp.status_code == 200
+    assert "ACME" in resp.text
+
+    resp = client.get("/ideas?q=NOPEMATCH")
+    assert resp.status_code == 200
+    assert "No ideas match" in resp.text
+
+    resp = client.get("/ideas?direction=short")
+    assert resp.status_code == 200
+    assert "No ideas match" in resp.text
+
+
+async def test_backfill_starts_background_job(client, tmp_path, monkeypatch):
+    from app.services import ingest
+
+    async def fake_ingest(url):
+        return {"ok": True, "issue_id": 1, "ideas": 0, "error": None}
+
+    monkeypatch.setattr(ingest, "ingest_issue", fake_ingest)
+
+    db_path = tmp_path / "app-test.db"
+    await init_db(str(db_path))
+
+    resp = client.post("/admin/backfill")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert "job_id" in data
+
+    job = {"status": "running"}
+    for _ in range(60):
+        job = client.get("/admin/jobs/latest?kind=backfill").json()
+        if job.get("status") != "running":
+            break
+        time.sleep(0.05)
+    assert job["status"] == "done"
+
+
+async def test_backfill_rejects_when_already_running(client, tmp_path, monkeypatch):
+    from app.services import ingest
+
+    async def slow_ingest(url):
+        await asyncio.sleep(1)
+        return {"ok": True, "issue_id": 1, "ideas": 0, "error": None}
+
+    monkeypatch.setattr(ingest, "ingest_issue", slow_ingest)
+    db_path = tmp_path / "app-test.db"
+    await init_db(str(db_path))
+
+    first = client.post("/admin/backfill")
+    assert first.json()["ok"] is True
+
+    second = client.post("/admin/backfill")
+    assert second.json()["ok"] is False
+
+
+async def test_analyze_issue_starts_background_job(client, tmp_path, monkeypatch):
+    from app.services import analyst
+
+    db_path = tmp_path / "app-test.db"
+    await init_db(str(db_path))
+    conn = await connect(str(db_path))
+    await conn.execute(
+        "INSERT INTO issues (source_url, title, status) VALUES ('http://x/3.pdf', 'T3', 'parsed')"
+    )
+    await conn.commit()
+    issue_id = (await conn.execute_fetchall("SELECT last_insert_rowid() AS id"))[0]["id"]
+    await conn.close()
+
+    async def fake_analyze_issue(iid, db_path=None):
+        return {"issue_id": iid, "results": []}
+
+    monkeypatch.setattr(analyst, "analyze_issue", fake_analyze_issue)
+
+    resp = client.post(f"/admin/issues/{issue_id}/analyze")
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+
+    job = {"status": "running"}
+    for _ in range(60):
+        job = client.get("/admin/jobs/latest?kind=analyze").json()
+        if job.get("status") != "running":
+            break
+        time.sleep(0.05)
+    assert job["status"] == "done"

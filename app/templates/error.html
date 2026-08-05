@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}{{ status_code }} · Graham &amp; Doddsville{% endblock %}
+{% block body %}
+<div class="py-16 text-center space-y-4">
+  <div class="text-5xl font-bold text-slate-300">{{ status_code }}</div>
+  <p class="text-slate-600">{{ detail }}</p>
+  <a href="{{ prefix }}/" class="inline-flex text-sm text-indigo-600 hover:underline">&larr; Back to dashboard</a>
+</div>
+{% endblock %}

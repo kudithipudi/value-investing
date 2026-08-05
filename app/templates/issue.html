@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block title %}{{ issue.title }} · Graham &amp; Doddsville{% endblock %}
+{% block breadcrumb %}
+<div class="flex items-center justify-between text-sm gap-4 flex-wrap">
+  <a href="{{ prefix }}/" class="text-indigo-600 hover:underline">&larr; Dashboard</a>
+  <div class="flex items-center gap-4">
+    {% if issue.prev_issue %}<a href="{{ prefix }}/issues/{{ issue.prev_issue.id }}" class="text-slate-500 hover:text-indigo-600 transition">&larr; {{ issue.prev_issue.title }}</a>{% endif %}
+    {% if issue.next_issue %}<a href="{{ prefix }}/issues/{{ issue.next_issue.id }}" class="text-slate-500 hover:text-indigo-600 transition">{{ issue.next_issue.title }} &rarr;</a>{% endif %}
+  </div>
+</div>
+{% endblock %}
+{% block body %}
+
+<div>
+  <h1 class="text-2xl font-bold mt-1">{{ issue.title }}</h1>
+  <div class="flex items-center gap-3 mt-1 text-sm text-slate-500">
+    <span>Issue {{ issue.issue_number or '—' }}</span>
+    <span>·</span>
+    <span class="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold
+      {% if issue.status == 'analyzed' %}bg-emerald-100 text-emerald-800{% else %}bg-amber-100 text-amber-800{% endif %}">{{ issue.status }}</span>
+  </div>
+</div>
+
+<div x-data="analyzeJob({{ issue.id }}, '{{ prefix }}')" x-init="poll()" class="flex flex-wrap items-center gap-3 text-sm">
+  <button @click="start()" :disabled="running"
+    class="px-3 py-1.5 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-500 disabled:opacity-60 disabled:cursor-not-allowed">
+    <span x-show="!running">Analyze ideas</span>
+    <span x-show="running" x-cloak>Analyzing&hellip; <span x-text="progressText"></span></span>
+  </button>
+  <span x-show="lastResult" x-cloak class="text-slate-500" x-text="lastResult"></span>
+</div>
+
+<section>
+  <h2 class="text-lg font-bold mb-3">{{ ideas|length }} ideas</h2>
+  {% if ideas %}
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+    {% for idea in ideas %}
+    <a href="{{ prefix }}/ideas/{{ idea.id }}" class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm hover:border-indigo-300 transition block">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <span class="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold
+            {% if idea.kind == 'pitch' %}bg-indigo-100 text-indigo-800{% else %}bg-slate-100 text-slate-600{% endif %}">
+            {{ idea.kind }}</span>
+          {% if idea.direction %}
+          <span class="text-[11px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-medium">{{ idea.direction }}</span>
+          {% endif %}
+          {% if idea.verdict %}
+          <span class="px-1.5 py-0.5 rounded text-[10px] font-semibold
+            {% if idea.verdict == 'worked' %}bg-emerald-100 text-emerald-800
+            {% elif idea.verdict == 'failed' %}bg-rose-100 text-rose-800
+            {% elif idea.verdict == 'partial' %}bg-amber-100 text-amber-800
+            {% else %}bg-slate-100 text-slate-600{% endif %}">{{ idea.verdict }}</span>
+          {% endif %}
+        </div>
+        {% if idea.return_pct is not none %}
+        <span class="font-mono font-semibold text-sm {% if idea.return_pct >= 0 %}text-emerald-600{% else %}text-rose-600{% endif %}">
+          {{ '%+.1f'|format(idea.return_pct) }}%
+        </span>
+        {% endif %}
+      </div>
+      <div class="mt-2 font-bold">{{ idea.ticker or '—' }} <span class="font-normal text-slate-500 text-sm">{{ idea.company }}</span></div>
+      {% if idea.challenge %}<div class="text-xs text-indigo-600 mt-0.5">{{ idea.challenge }}</div>{% endif %}
+      <p class="mt-2 text-xs text-slate-600">{{ (idea.thesis or '')[:220] }}{% if idea.thesis and idea.thesis|length > 220 %}…{% endif %}</p>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="rounded-xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">No ideas extracted for this issue.</div>
+  {% endif %}
+</section>
+
+<script>
+function analyzeJob(issueId, prefix) {
+  return {
+    running: false,
+    progressText: '',
+    lastResult: '',
+    async start() {
+      this.running = true;
+      this.lastResult = '';
+      try {
+        const resp = await fetch(`${prefix}/admin/issues/${issueId}/analyze`, {method: 'POST'});
+        const data = await resp.json();
+        if (!data.ok) { this.running = false; this.lastResult = data.error || 'failed to start'; return; }
+      } catch (e) { this.running = false; this.lastResult = 'failed to start'; return; }
+      this.poll();
+    },
+    async poll() {
+      let job;
+      try {
+        const resp = await fetch(`${prefix}/admin/jobs/latest?kind=analyze`);
+        job = await resp.json();
+      } catch (e) { return; }
+      const mine = job.note && job.note.issue_id === issueId;
+      if (job.status === 'running' && mine) {
+        this.running = true;
+        setTimeout(() => this.poll(), 2000);
+      } else if (this.running && mine) {
+        this.running = false;
+        if (job.status === 'done') {
+          const n = job.note || {};
+          this.lastResult = `Done — ${n.ok||0} ok, ${n.failed||0} failed.`;
+          window.location.reload();
+        } else {
+          this.lastResult = 'Analysis failed — check logs.';
+        }
+      }
+    }
+  }
+}
+</script>
+{% endblock %}

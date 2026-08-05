@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}All ideas · Graham &amp; Doddsville{% endblock %}
+{% block breadcrumb %}
+<a href="{{ prefix }}/" class="text-sm text-indigo-600 hover:underline">&larr; Dashboard</a>
+{% endblock %}
+{% block body %}
+
+<div>
+  <h1 class="text-2xl font-bold -mt-2">All ideas</h1>
+  <p class="text-sm text-slate-500 mt-1">{{ total }} idea{{ 's' if total != 1 else '' }} across every ingested issue.</p>
+</div>
+
+<form method="get" action="{{ prefix }}/ideas" class="flex flex-wrap gap-2 items-center">
+  <input type="text" name="q" value="{{ q }}" placeholder="Search ticker or company&hellip;"
+    class="flex-1 min-w-[180px] rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 ring-indigo-500" />
+  <select name="kind" class="rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white">
+    <option value="" {% if not kind %}selected{% endif %}>Any kind</option>
+    <option value="pitch" {% if kind == 'pitch' %}selected{% endif %}>Pitch</option>
+    <option value="position" {% if kind == 'position' %}selected{% endif %}>Position</option>
+  </select>
+  <select name="direction" class="rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white">
+    <option value="" {% if not direction %}selected{% endif %}>Any direction</option>
+    <option value="long" {% if direction == 'long' %}selected{% endif %}>Long</option>
+    <option value="short" {% if direction == 'short' %}selected{% endif %}>Short</option>
+    <option value="long/short" {% if direction == 'long/short' %}selected{% endif %}>Long/short</option>
+  </select>
+  <select name="verdict" class="rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white">
+    <option value="" {% if not verdict %}selected{% endif %}>Any verdict</option>
+    <option value="worked" {% if verdict == 'worked' %}selected{% endif %}>Worked</option>
+    <option value="partial" {% if verdict == 'partial' %}selected{% endif %}>Partial</option>
+    <option value="failed" {% if verdict == 'failed' %}selected{% endif %}>Failed</option>
+    <option value="inconclusive" {% if verdict == 'inconclusive' %}selected{% endif %}>Inconclusive</option>
+  </select>
+  <button class="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">Filter</button>
+  {% if q or kind or direction or verdict %}
+  <a href="{{ prefix }}/ideas" class="text-sm text-slate-500 hover:text-indigo-600">Clear</a>
+  {% endif %}
+</form>
+
+{% if ideas %}
+<div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+  {% for idea in ideas %}
+  <a href="{{ prefix }}/ideas/{{ idea.id }}" class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm hover:border-indigo-300 transition block">
+    <div class="flex items-center justify-between gap-2">
+      <span class="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold
+        {% if idea.kind == 'pitch' %}bg-indigo-100 text-indigo-800{% else %}bg-slate-100 text-slate-600{% endif %}">
+        {{ idea.kind }}</span>
+      <span class="text-[11px] text-slate-400">{{ idea.season }}</span>
+    </div>
+    <div class="mt-2 font-bold">{{ idea.ticker or '—' }} <span class="font-normal text-slate-500 text-sm">{{ idea.company }}</span></div>
+    <div class="flex items-center gap-2 mt-1 text-xs">
+      {% if idea.direction %}<span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-medium">{{ idea.direction }}</span>{% endif %}
+      {% if idea.return_pct is not none %}
+      <span class="font-mono font-semibold {% if idea.return_pct >= 0 %}text-emerald-600{% else %}text-rose-600{% endif %}">{{ '%+.1f'|format(idea.return_pct) }}%</span>
+      {% endif %}
+      {% if idea.verdict %}
+      <span class="px-1.5 py-0.5 rounded text-[10px] font-semibold
+        {% if idea.verdict == 'worked' %}bg-emerald-100 text-emerald-800
+        {% elif idea.verdict == 'failed' %}bg-rose-100 text-rose-800
+        {% elif idea.verdict == 'partial' %}bg-amber-100 text-amber-800
+        {% else %}bg-slate-100 text-slate-600{% endif %}">{{ idea.verdict }}</span>
+      {% endif %}
+    </div>
+    <p class="mt-2 text-xs text-slate-600 line-clamp-2">{{ (idea.thesis or '')[:200] }}</p>
+  </a>
+  {% endfor %}
+</div>
+
+<div class="flex items-center justify-between pt-2">
+  {% if has_prev %}
+  <a href="{{ prefix }}/ideas?q={{ q }}&kind={{ kind }}&direction={{ direction }}&verdict={{ verdict }}&page={{ page - 1 }}" class="text-sm text-indigo-600 hover:underline">&larr; Newer</a>
+  {% else %}<span></span>{% endif %}
+  <span class="text-xs text-slate-400">Page {{ page }}</span>
+  {% if has_next %}
+  <a href="{{ prefix }}/ideas?q={{ q }}&kind={{ kind }}&direction={{ direction }}&verdict={{ verdict }}&page={{ page + 1 }}" class="text-sm text-indigo-600 hover:underline">Older &rarr;</a>
+  {% else %}<span></span>{% endif %}
+</div>
+{% else %}
+<div class="rounded-xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">
+  No ideas match these filters.
+</div>
+{% endif %}
+
+{% endblock %}
