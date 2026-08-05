@@ -176,6 +176,80 @@ async def test_prices_current_price_search_no_match_stays_none(fake_httpx):
     assert price is None
 
 
+def test_names_match():
+    assert prices._names_match("Amadeus IT Group", "Amadeus IT Group, S.A.")
+    assert not prices._names_match("Amadeus IT Group", "American Shared Hospital Services")
+    assert not prices._names_match("Amadeus IT Group", None)
+
+
+_CHART_WRONG_COMPANY = {
+    "chart": {"result": [{
+        "timestamp": [1700000000],
+        "indicators": {"quote": [{"close": [1.49]}]},
+        "meta": {"longName": "American Shared Hospital Services"},
+    }]}
+}
+_CHART_CORRECT_COMPANY = {
+    "chart": {"result": [{
+        "timestamp": [1700000000],
+        "indicators": {"quote": [{"close": [57.56]}]},
+        "meta": {"longName": "Amadeus IT Group, S.A."},
+    }]}
+}
+_SEARCH_AMADEUS = {
+    "quotes": [{"symbol": "AMS.MC", "shortname": "AMADEUS IT GROUP, S.A.", "exchange": "MCE", "quoteType": "EQUITY"}]
+}
+
+
+async def test_prices_current_price_detects_wrong_company_collision(fake_httpx):
+    """A bare ticker that resolves to real chart data for an unrelated
+    company (AMS = American Shared Hospital Services, not Amadeus IT Group)
+    must not be trusted — re-resolve by company name instead."""
+
+    def handler(request):
+        url = str(request.url)
+        if "/finance/search" in url:
+            return httpx.Response(200, json=_SEARCH_AMADEUS)
+        if "/chart/AMS.MC" in url:
+            return httpx.Response(200, json=_CHART_CORRECT_COMPANY)
+        if "/chart/AMS" in url:
+            return httpx.Response(200, json=_CHART_WRONG_COMPANY)
+        return httpx.Response(200, json=_EMPTY_CHART)
+
+    fake_httpx(handler)
+    price, as_of = await prices.current_price("AMS", company="Amadeus IT Group")
+    assert price == 57.56
+
+
+async def test_prices_current_price_keeps_original_when_search_finds_nothing(fake_httpx):
+    """A name mismatch that search *can't* resolve either (e.g. the stored
+    company field is an informal name like "Sallie Mae" for SLM Corporation,
+    which Yahoo's search doesn't index) must not discard a real price we
+    have no actual evidence is wrong — that's strictly worse than keeping it."""
+
+    def handler(request):
+        url = str(request.url)
+        if "/finance/search" in url:
+            return httpx.Response(200, json=_SEARCH_NO_MATCH)
+        return httpx.Response(200, json=_CHART_WRONG_COMPANY)  # named "American Shared..."
+
+    fake_httpx(handler)
+    price, as_of = await prices.current_price("SLM", company="Sallie Mae")
+    assert price == 1.49  # kept, not nulled out, despite the name mismatch
+
+
+async def test_prices_current_price_without_company_trusts_bare_ticker(fake_httpx):
+    """No company to verify against -> unchanged behavior for callers that
+    don't pass one."""
+
+    def handler(request):
+        return httpx.Response(200, json=_CHART_WRONG_COMPANY)
+
+    fake_httpx(handler)
+    price, as_of = await prices.current_price("AMS")
+    assert price == 1.49
+
+
 _SEARCH_MIRROR_AND_PRIMARY = {
     "quotes": [
         {"symbol": "GEB.MU", "shortname": "Bank of Georgia Group", "exchange": "MUN", "quoteType": "EQUITY"},

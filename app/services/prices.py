@@ -44,17 +44,24 @@ def _headers() -> dict:
     return {"User-Agent": get_settings().user_agent}
 
 
-def _parse_result(data: dict) -> tuple[list[int] | None, list[float] | None]:
+def _parse_result(data: dict) -> tuple[list[int] | None, list[float] | None, str | None]:
     try:
         result = data["chart"]["result"][0]
         timestamps = result.get("timestamp")
         closes = result["indicators"]["quote"][0].get("close")
-        return timestamps, closes
+        meta = result.get("meta") or {}
+        name = meta.get("longName") or meta.get("shortName")
+        return timestamps, closes, name
     except (KeyError, IndexError, TypeError):
-        return None, None
+        return None, None, None
 
 
-async def _fetch(ticker: str, period1: int, period2: int, interval: str = "1d") -> tuple[list[int] | None, list[float] | None]:
+async def _fetch(ticker: str, period1: int, period2: int, interval: str = "1d") -> tuple[list[int] | None, list[float] | None, str | None]:
+    """Returns (timestamps, closes, instrument name). The name lets callers
+    catch a bare ticker that resolves to real chart data for the WRONG
+    company (e.g. "AMS" is a real, unrelated NYSE American penny stock, not
+    Amadeus IT Group) — a case a plain "did the request succeed" check can't
+    catch, since Yahoo happily returns valid-looking data for it."""
     async def _do_request():
         async with httpx.AsyncClient(timeout=30, headers=_headers()) as client:
             resp = await client.get(
@@ -68,11 +75,19 @@ async def _fetch(ticker: str, period1: int, period2: int, interval: str = "1d") 
         resp = await with_retry(_do_request)
     except httpx.HTTPStatusError as exc:
         logger.warning("Yahoo chart failed for %s: %s", ticker, exc.response.status_code)
-        return None, None
+        return None, None, None
     except httpx.TransportError as exc:
         logger.warning("Yahoo chart request failed for %s: %s", ticker, exc)
-        return None, None
+        return None, None, None
     return _parse_result(resp.json())
+
+
+def _names_match(company: str, candidate_name: str | None) -> bool:
+    if not candidate_name:
+        return False
+    company_words = set(re.findall(r"[a-z]+", company.lower()))
+    candidate_words = set(re.findall(r"[a-z]+", candidate_name.lower()))
+    return bool(company_words & candidate_words)
 
 
 # German regional exchanges that mirror foreign stocks in EUR with thin
@@ -103,11 +118,10 @@ async def _search_symbol(company: str) -> str | None:
     try:
         resp = await with_retry(_do_request, attempts=2)
         quotes = resp.json().get("quotes", [])
-        company_words = set(re.findall(r"[a-z]+", company.lower()))
         candidates = [
             q for q in quotes
             if q.get("quoteType") == "EQUITY"
-            and company_words & set(re.findall(r"[a-z]+", (q.get("shortname") or q.get("longname") or "").lower()))
+            and _names_match(company, q.get("shortname") or q.get("longname"))
         ]
         preferred = [q for q in candidates if q.get("exchange") not in _MIRROR_EXCHANGES]
         pick = (preferred or candidates)
@@ -124,30 +138,39 @@ async def current_price(ticker: str, company: str | None = None) -> tuple[float 
     """Returns (price, as_of iso date), cached for _CACHE_TTL seconds per ticker.
 
     Falls back to resolving `company` to an exchange-qualified symbol (see
-    _search_symbol) when the bare ticker has no data.
+    _search_symbol) when the bare ticker has no data, OR when it resolves to
+    a real but unrelated company (a same-symbol collision — see _fetch).
     """
     cached = _price_cache.get(ticker)
     if cached is not None and time.monotonic() - cached[2] < _CACHE_TTL:
         return cached[0], cached[1]
 
-    price, as_of = await _current_price_uncached(ticker)
-    if price is None and company:
+    price, as_of, name = await _current_price_uncached(ticker)
+    if company and (price is None or not _names_match(company, name)):
+        if price is not None:
+            logger.warning("Ticker %r resolved to %r, not %r — re-resolving by name", ticker, name, company)
         resolved = await _search_symbol(company)
         if resolved and resolved != ticker:
-            price, as_of = await _current_price_uncached(resolved)
+            resolved_price, resolved_as_of, _ = await _current_price_uncached(resolved)
+            if resolved_price is not None:
+                price, as_of = resolved_price, resolved_as_of
+        # else: search couldn't confirm or deny it (e.g. an informal company
+        # name Yahoo's search doesn't index, like "Sallie Mae" for SLM
+        # Corporation) — keep whatever `price` already is rather than
+        # discarding a number we have no actual evidence is wrong.
     _price_cache[ticker] = (price, as_of, time.monotonic())
     return price, as_of
 
 
-async def _current_price_uncached(ticker: str) -> tuple[float | None, str | None]:
+async def _current_price_uncached(ticker: str) -> tuple[float | None, str | None, str | None]:
     now = int(datetime.now(timezone.utc).timestamp())
-    ts, closes = await _fetch(ticker, now - 90 * 86400, now)
+    ts, closes, name = await _fetch(ticker, now - 90 * 86400, now)
     if ts and closes:
         for i in range(len(closes) - 1, -1, -1):
             if closes[i] is not None:
                 as_of = datetime.fromtimestamp(ts[i], tz=timezone.utc).date().isoformat()
-                return float(closes[i]), as_of
-    return None, None
+                return float(closes[i]), as_of, name
+    return None, None, name
 
 
 async def price_at(ticker: str, when: str | date, company: str | None = None) -> float | None:
@@ -159,29 +182,32 @@ async def price_at(ticker: str, when: str | date, company: str | None = None) ->
     period1 = int(datetime(d.year, d.month, d.day, tzinfo=timezone.utc).timestamp())
     period2 = period1 + 400 * 86400
 
-    price = await _price_at_uncached(ticker, period1, period2)
-    if price is None and company:
+    price, name = await _price_at_uncached(ticker, period1, period2)
+    if company and (price is None or not _names_match(company, name)):
         resolved = await _search_symbol(company)
         if resolved and resolved != ticker:
-            price = await _price_at_uncached(resolved, period1, period2)
+            resolved_price, _ = await _price_at_uncached(resolved, period1, period2)
+            if resolved_price is not None:
+                price = resolved_price
+        # else: keep the original price — see current_price's comment above.
     return price
 
 
-async def _price_at_uncached(ticker: str, period1: int, period2: int) -> float | None:
-    ts, closes = await _fetch(ticker, period1, period2)
+async def _price_at_uncached(ticker: str, period1: int, period2: int) -> tuple[float | None, str | None]:
+    ts, closes, name = await _fetch(ticker, period1, period2)
     if not ts or not closes:
-        return None
+        return None, name
     for i in range(len(closes)):
         if closes[i] is not None:
-            return float(closes[i])
-    return None
+            return float(closes[i]), name
+    return None, name
 
 
 async def price_series(ticker: str, start: date, end: date) -> list[dict]:
     """Daily closes between start and end, for charting."""
     period1 = int(datetime(start.year, start.month, start.day, tzinfo=timezone.utc).timestamp())
     period2 = int(datetime(end.year, end.month, end.day, tzinfo=timezone.utc).timestamp()) + 86400
-    ts, closes = await _fetch(ticker, period1, period2, interval="1d")
+    ts, closes, _ = await _fetch(ticker, period1, period2, interval="1d")
     if not ts or not closes:
         return []
     return [

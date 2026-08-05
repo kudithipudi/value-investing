@@ -98,6 +98,14 @@ listing page blocks bots, but PDFs are downloadable), or use the backfill button
   `app/services/prices.py` falls back to Yahoo's own symbol search keyed on the company
   name, preferring a real primary/US-OTC listing over thin same-day German mirror
   exchanges (which quote in EUR and aren't comparable to a USD reference price).
+  It also cross-checks the returned instrument's name against the idea's company —
+  a bare ticker can return real, valid-looking data for a completely unrelated company
+  (e.g. "AMS" is a real NYSE American penny stock, American Shared Hospital Services,
+  not Amadeus IT Group's Madrid listing), which a plain success/failure check on the
+  request can't catch. If the name search can't confirm a better symbol either (e.g.
+  the stored company field is an informal name Yahoo's search doesn't index), the
+  original price is kept rather than discarded — there's no evidence it's wrong, and
+  silently returning "no data" for a real number would be worse.
 - Returns are approximate: reference price is the price stated in the pitch when given,
   else the price on the stated pitch date.
 - The "worked / partial / failed / inconclusive" verdict is time-aware: it weighs the
