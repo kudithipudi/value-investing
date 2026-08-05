@@ -21,9 +21,11 @@ def _reset_price_cache():
 
     prices._price_cache.clear()
     prices._symbol_cache.clear()
+    prices._fx_cache.clear()
     yield
     prices._price_cache.clear()
     prices._symbol_cache.clear()
+    prices._fx_cache.clear()
 
 
 @pytest.fixture

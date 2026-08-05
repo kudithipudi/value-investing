@@ -9,9 +9,11 @@ ticker/company to the correct exchange-qualified symbol when the bare ticker
 returns no data, and caches the resolution.
 
 Provides:
-- current_price(ticker, company): latest close, resolving via company name
-  search if the bare ticker has no data
+- current_price(ticker, company): (price, as_of, currency); resolves via
+  company name search if the bare ticker has no data
 - price_at(ticker, date, company): closing price on/just after a given date
+- convert_to_usd(amount, currency): USD equivalent via Yahoo's FX pairs, for
+  displaying a non-USD price alongside its USD value
 """
 
 import logging
@@ -39,29 +41,38 @@ _price_cache: dict[str, tuple[float | None, str | None, float]] = {}
 # the process rather than on the shorter price TTL.
 _symbol_cache: dict[str, str | None] = {}
 
+# FX rate cache: currency -> (USD per 1 unit of currency, cached_at). FX
+# moves far less than individual stock prices, so this gets a longer TTL.
+_FX_CACHE_TTL = 3600  # seconds
+_fx_cache: dict[str, tuple[float | None, float]] = {}
+
 
 def _headers() -> dict:
     return {"User-Agent": get_settings().user_agent}
 
 
-def _parse_result(data: dict) -> tuple[list[int] | None, list[float] | None, str | None]:
+def _parse_result(data: dict) -> tuple[list[int] | None, list[float] | None, str | None, str | None]:
     try:
         result = data["chart"]["result"][0]
         timestamps = result.get("timestamp")
         closes = result["indicators"]["quote"][0].get("close")
         meta = result.get("meta") or {}
         name = meta.get("longName") or meta.get("shortName")
-        return timestamps, closes, name
+        currency = meta.get("currency")
+        return timestamps, closes, name, currency
     except (KeyError, IndexError, TypeError):
-        return None, None, None
+        return None, None, None, None
 
 
-async def _fetch(ticker: str, period1: int, period2: int, interval: str = "1d") -> tuple[list[int] | None, list[float] | None, str | None]:
-    """Returns (timestamps, closes, instrument name). The name lets callers
-    catch a bare ticker that resolves to real chart data for the WRONG
-    company (e.g. "AMS" is a real, unrelated NYSE American penny stock, not
-    Amadeus IT Group) — a case a plain "did the request succeed" check can't
-    catch, since Yahoo happily returns valid-looking data for it."""
+async def _fetch(
+    ticker: str, period1: int, period2: int, interval: str = "1d"
+) -> tuple[list[int] | None, list[float] | None, str | None, str | None]:
+    """Returns (timestamps, closes, instrument name, currency). The name lets
+    callers catch a bare ticker that resolves to real chart data for the
+    WRONG company (e.g. "AMS" is a real, unrelated NYSE American penny
+    stock, not Amadeus IT Group) — a case a plain "did the request succeed"
+    check can't catch, since Yahoo happily returns valid-looking data for
+    it. The currency lets callers convert a non-USD price for display."""
     async def _do_request():
         async with httpx.AsyncClient(timeout=30, headers=_headers()) as client:
             resp = await client.get(
@@ -75,10 +86,10 @@ async def _fetch(ticker: str, period1: int, period2: int, interval: str = "1d") 
         resp = await with_retry(_do_request)
     except httpx.HTTPStatusError as exc:
         logger.warning("Yahoo chart failed for %s: %s", ticker, exc.response.status_code)
-        return None, None, None
+        return None, None, None, None
     except httpx.TransportError as exc:
         logger.warning("Yahoo chart request failed for %s: %s", ticker, exc)
-        return None, None, None
+        return None, None, None, None
     return _parse_result(resp.json())
 
 
@@ -134,43 +145,46 @@ async def _search_symbol(company: str) -> str | None:
     return resolved
 
 
-async def current_price(ticker: str, company: str | None = None) -> tuple[float | None, str | None]:
-    """Returns (price, as_of iso date), cached for _CACHE_TTL seconds per ticker.
+async def current_price(
+    ticker: str, company: str | None = None
+) -> tuple[float | None, str | None, str | None]:
+    """Returns (price, as_of iso date, currency e.g. "USD"/"EUR"), cached for
+    _CACHE_TTL seconds per ticker.
 
     Falls back to resolving `company` to an exchange-qualified symbol (see
     _search_symbol) when the bare ticker has no data, OR when it resolves to
     a real but unrelated company (a same-symbol collision — see _fetch).
     """
     cached = _price_cache.get(ticker)
-    if cached is not None and time.monotonic() - cached[2] < _CACHE_TTL:
-        return cached[0], cached[1]
+    if cached is not None and time.monotonic() - cached[3] < _CACHE_TTL:
+        return cached[0], cached[1], cached[2]
 
-    price, as_of, name = await _current_price_uncached(ticker)
+    price, as_of, name, currency = await _current_price_uncached(ticker)
     if company and (price is None or not _names_match(company, name)):
         if price is not None:
             logger.warning("Ticker %r resolved to %r, not %r — re-resolving by name", ticker, name, company)
         resolved = await _search_symbol(company)
         if resolved and resolved != ticker:
-            resolved_price, resolved_as_of, _ = await _current_price_uncached(resolved)
+            resolved_price, resolved_as_of, _, resolved_currency = await _current_price_uncached(resolved)
             if resolved_price is not None:
-                price, as_of = resolved_price, resolved_as_of
+                price, as_of, currency = resolved_price, resolved_as_of, resolved_currency
         # else: search couldn't confirm or deny it (e.g. an informal company
         # name Yahoo's search doesn't index, like "Sallie Mae" for SLM
         # Corporation) — keep whatever `price` already is rather than
         # discarding a number we have no actual evidence is wrong.
-    _price_cache[ticker] = (price, as_of, time.monotonic())
-    return price, as_of
+    _price_cache[ticker] = (price, as_of, currency, time.monotonic())
+    return price, as_of, currency
 
 
-async def _current_price_uncached(ticker: str) -> tuple[float | None, str | None, str | None]:
+async def _current_price_uncached(ticker: str) -> tuple[float | None, str | None, str | None, str | None]:
     now = int(datetime.now(timezone.utc).timestamp())
-    ts, closes, name = await _fetch(ticker, now - 90 * 86400, now)
+    ts, closes, name, currency = await _fetch(ticker, now - 90 * 86400, now)
     if ts and closes:
         for i in range(len(closes) - 1, -1, -1):
             if closes[i] is not None:
                 as_of = datetime.fromtimestamp(ts[i], tz=timezone.utc).date().isoformat()
-                return float(closes[i]), as_of, name
-    return None, None, name
+                return float(closes[i]), as_of, name, currency
+    return None, None, name, currency
 
 
 async def price_at(ticker: str, when: str | date, company: str | None = None) -> float | None:
@@ -194,7 +208,7 @@ async def price_at(ticker: str, when: str | date, company: str | None = None) ->
 
 
 async def _price_at_uncached(ticker: str, period1: int, period2: int) -> tuple[float | None, str | None]:
-    ts, closes, name = await _fetch(ticker, period1, period2)
+    ts, closes, name, _currency = await _fetch(ticker, period1, period2)
     if not ts or not closes:
         return None, name
     for i in range(len(closes)):
@@ -207,7 +221,7 @@ async def price_series(ticker: str, start: date, end: date) -> list[dict]:
     """Daily closes between start and end, for charting."""
     period1 = int(datetime(start.year, start.month, start.day, tzinfo=timezone.utc).timestamp())
     period2 = int(datetime(end.year, end.month, end.day, tzinfo=timezone.utc).timestamp()) + 86400
-    ts, closes, _ = await _fetch(ticker, period1, period2, interval="1d")
+    ts, closes, _name, _currency = await _fetch(ticker, period1, period2, interval="1d")
     if not ts or not closes:
         return []
     return [
@@ -215,6 +229,39 @@ async def price_series(ticker: str, start: date, end: date) -> list[dict]:
         for t, c in zip(ts, closes)
         if c is not None
     ]
+
+
+async def _usd_rate(currency: str) -> float | None:
+    """How many USD one unit of `currency` is worth, via Yahoo's FX pairs
+    (e.g. "EURUSD=X"). USD itself is always 1:1, no request needed."""
+    currency = currency.upper()
+    if currency == "USD":
+        return 1.0
+    cached = _fx_cache.get(currency)
+    if cached is not None and time.monotonic() - cached[1] < _FX_CACHE_TTL:
+        return cached[0]
+
+    now = int(datetime.now(timezone.utc).timestamp())
+    ts, closes, _name, _pair_currency = await _fetch(f"{currency}USD=X", now - 5 * 86400, now)
+    rate = None
+    if closes:
+        for c in reversed(closes):
+            if c is not None:
+                rate = float(c)
+                break
+    _fx_cache[currency] = (rate, time.monotonic())
+    return rate
+
+
+async def convert_to_usd(amount: float | None, currency: str | None) -> float | None:
+    """Converts `amount` in `currency` to USD, or None if the amount or the
+    FX rate isn't available."""
+    if amount is None or not currency:
+        return None
+    rate = await _usd_rate(currency)
+    if rate is None:
+        return None
+    return amount * rate
 
 
 def format_ticker(ticker: str) -> str:

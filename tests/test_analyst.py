@@ -32,7 +32,7 @@ async def test_refresh_idea_performance(tmp_path, monkeypatch):
     _, idea_id = await _seed_issue_and_idea(db_path, price_at_pitch=100.0)
 
     async def fake_current_price(ticker, company=None):
-        return 150.0, "2026-01-01"
+        return 150.0, "2026-01-01", "USD"
 
     monkeypatch.setattr(analyst.prices, "current_price", fake_current_price)
 
@@ -41,12 +41,33 @@ async def test_refresh_idea_performance(tmp_path, monkeypatch):
     assert result["return_pct"] == pytest.approx(50.0)
 
 
+async def test_refresh_idea_performance_stores_currency(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "a.db")
+    _, idea_id = await _seed_issue_and_idea(db_path, price_at_pitch=100.0)
+
+    async def fake_current_price(ticker, company=None):
+        return 150.0, "2026-01-01", "EUR"
+
+    monkeypatch.setattr(analyst.prices, "current_price", fake_current_price)
+
+    await analyst.refresh_idea_performance(idea_id, db_path=db_path)
+
+    conn = await connect(db_path)
+    try:
+        row = (await conn.execute_fetchall(
+            "SELECT currency FROM performance WHERE idea_id = ? ORDER BY id DESC LIMIT 1", (idea_id,)
+        ))[0]
+    finally:
+        await conn.close()
+    assert row["currency"] == "EUR"
+
+
 async def test_refresh_idea_performance_short_inverts_return(tmp_path, monkeypatch):
     db_path = str(tmp_path / "a.db")
     _, idea_id = await _seed_issue_and_idea(db_path, direction="short", price_at_pitch=100.0)
 
     async def fake_current_price(ticker, company=None):
-        return 150.0, "2026-01-01"
+        return 150.0, "2026-01-01", "USD"
 
     monkeypatch.setattr(analyst.prices, "current_price", fake_current_price)
 
@@ -59,7 +80,7 @@ async def test_refresh_idea_performance_no_price_data(tmp_path, monkeypatch):
     _, idea_id = await _seed_issue_and_idea(db_path)
 
     async def fake_current_price(ticker, company=None):
-        return None, None
+        return None, None, None
 
     monkeypatch.setattr(analyst.prices, "current_price", fake_current_price)
 
@@ -158,7 +179,7 @@ async def test_analyze_issue_marks_analyzed(tmp_path, monkeypatch):
     issue_id, _ = await _seed_issue_and_idea(db_path)
 
     async def fake_current_price(ticker, company=None):
-        return 120.0, "2026-01-01"
+        return 120.0, "2026-01-01", "USD"
 
     async def fake_judge_idea(thesis, direction, return_pct, months_elapsed=None):
         return {"verdict": "partial", "explanation": "meh", "confidence": "medium"}

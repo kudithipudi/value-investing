@@ -25,9 +25,21 @@ async def init_db(db_path: str | None = None) -> None:
         schema = _SCHEMA_PATH.read_text()
         await conn.executescript(schema)
         await conn.commit()
+        await _migrate(conn)
         logger.info("Database schema applied")
     finally:
         await conn.close()
+
+
+async def _migrate(conn: aiosqlite.Connection) -> None:
+    """Additive column migrations that `CREATE TABLE IF NOT EXISTS` can't
+    express — it only creates tables that don't exist yet, not columns
+    missing from a table that already does."""
+    cols = {row["name"] for row in await conn.execute_fetchall("PRAGMA table_info(performance)")}
+    if "currency" not in cols:
+        await conn.execute("ALTER TABLE performance ADD COLUMN currency TEXT")
+        await conn.commit()
+        logger.info("Migrated: added performance.currency")
 
 
 async def get_db():

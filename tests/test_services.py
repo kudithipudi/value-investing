@@ -110,7 +110,7 @@ async def test_prices_current_price_retries_then_succeeds(fake_httpx, monkeypatc
         return httpx.Response(200, json=_CHART_OK)
 
     fake_httpx(handler)
-    price, as_of = await prices.current_price("AAPL")
+    price, as_of, currency = await prices.current_price("AAPL")
     assert price == 123.45
     assert calls["n"] == 2
 
@@ -133,7 +133,7 @@ async def test_prices_current_price_gives_up_on_404(fake_httpx):
         return httpx.Response(404)
 
     fake_httpx(handler)
-    price, as_of = await prices.current_price("NOPE")
+    price, as_of, currency = await prices.current_price("NOPE")
     assert price is None
 
 
@@ -161,7 +161,7 @@ async def test_prices_current_price_resolves_via_company_search(fake_httpx):
         return httpx.Response(200, json=_EMPTY_CHART)
 
     fake_httpx(handler)
-    price, as_of = await prices.current_price("RIO", company="Rio Tinto Group")
+    price, as_of, currency = await prices.current_price("RIO", company="Rio Tinto Group")
     assert price == 123.45
 
 
@@ -172,7 +172,7 @@ async def test_prices_current_price_search_no_match_stays_none(fake_httpx):
         return httpx.Response(200, json=_EMPTY_CHART)
 
     fake_httpx(handler)
-    price, as_of = await prices.current_price("XXXX", company="Some Untraceable Co")
+    price, as_of, currency = await prices.current_price("XXXX", company="Some Untraceable Co")
     assert price is None
 
 
@@ -193,7 +193,7 @@ _CHART_CORRECT_COMPANY = {
     "chart": {"result": [{
         "timestamp": [1700000000],
         "indicators": {"quote": [{"close": [57.56]}]},
-        "meta": {"longName": "Amadeus IT Group, S.A."},
+        "meta": {"longName": "Amadeus IT Group, S.A.", "currency": "EUR"},
     }]}
 }
 _SEARCH_AMADEUS = {
@@ -217,8 +217,9 @@ async def test_prices_current_price_detects_wrong_company_collision(fake_httpx):
         return httpx.Response(200, json=_EMPTY_CHART)
 
     fake_httpx(handler)
-    price, as_of = await prices.current_price("AMS", company="Amadeus IT Group")
+    price, as_of, currency = await prices.current_price("AMS", company="Amadeus IT Group")
     assert price == 57.56
+    assert currency == "EUR"
 
 
 async def test_prices_current_price_keeps_original_when_search_finds_nothing(fake_httpx):
@@ -234,7 +235,7 @@ async def test_prices_current_price_keeps_original_when_search_finds_nothing(fak
         return httpx.Response(200, json=_CHART_WRONG_COMPANY)  # named "American Shared..."
 
     fake_httpx(handler)
-    price, as_of = await prices.current_price("SLM", company="Sallie Mae")
+    price, as_of, currency = await prices.current_price("SLM", company="Sallie Mae")
     assert price == 1.49  # kept, not nulled out, despite the name mismatch
 
 
@@ -246,8 +247,54 @@ async def test_prices_current_price_without_company_trusts_bare_ticker(fake_http
         return httpx.Response(200, json=_CHART_WRONG_COMPANY)
 
     fake_httpx(handler)
-    price, as_of = await prices.current_price("AMS")
+    price, as_of, currency = await prices.current_price("AMS")
     assert price == 1.49
+
+
+_FX_EUR_USD = {
+    "chart": {"result": [{"timestamp": [1700000000], "indicators": {"quote": [{"close": [1.16]}]}}]}
+}
+
+
+async def test_convert_to_usd(fake_httpx):
+    def handler(request):
+        return httpx.Response(200, json=_FX_EUR_USD)
+
+    fake_httpx(handler)
+    usd = await prices.convert_to_usd(57.56, "EUR")
+    assert usd == pytest.approx(57.56 * 1.16)
+
+
+async def test_convert_to_usd_noop_for_usd():
+    # USD needs no FX lookup — must not attempt a network call.
+    usd = await prices.convert_to_usd(100.0, "USD")
+    assert usd == 100.0
+
+
+async def test_convert_to_usd_none_amount_or_currency():
+    assert await prices.convert_to_usd(None, "EUR") is None
+    assert await prices.convert_to_usd(100.0, None) is None
+
+
+async def test_convert_to_usd_missing_rate_returns_none(fake_httpx):
+    def handler(request):
+        return httpx.Response(404)
+
+    fake_httpx(handler)
+    assert await prices.convert_to_usd(100.0, "ZZZ") is None
+
+
+async def test_fx_rate_is_cached(fake_httpx):
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        return httpx.Response(200, json=_FX_EUR_USD)
+
+    fake_httpx(handler)
+    await prices.convert_to_usd(10.0, "EUR")
+    await prices.convert_to_usd(20.0, "EUR")
+    assert calls["n"] == 1
 
 
 _SEARCH_MIRROR_AND_PRIMARY = {
@@ -307,6 +354,32 @@ async def test_llm_chat_json_retries_then_succeeds(fake_httpx, monkeypatch):
     result = await llm.extract_ideas("some newsletter text")
     assert result == []
     assert calls["n"] == 2
+
+
+async def test_migrate_adds_currency_column_to_existing_table(tmp_path):
+    """A DB created before the currency column existed must get it added on
+    the next startup, not just fresh installs (CREATE TABLE IF NOT EXISTS
+    only creates missing tables, not missing columns on ones that exist)."""
+    import aiosqlite
+    from app.db import _migrate
+
+    db_path = tmp_path / "old.db"
+    conn = await aiosqlite.connect(str(db_path))
+    conn.row_factory = aiosqlite.Row
+    try:
+        await conn.execute(
+            "CREATE TABLE performance (id INTEGER PRIMARY KEY, idea_id INTEGER, current_price REAL)"
+        )
+        await conn.commit()
+        cols_before = {r["name"] for r in await conn.execute_fetchall("PRAGMA table_info(performance)")}
+        assert "currency" not in cols_before
+
+        await _migrate(conn)
+
+        cols_after = {r["name"] for r in await conn.execute_fetchall("PRAGMA table_info(performance)")}
+        assert "currency" in cols_after
+    finally:
+        await conn.close()
 
 
 async def test_llm_chat_json_no_api_key(monkeypatch):

@@ -61,7 +61,7 @@ async def refresh_idea_performance(idea_id: int, db_path: str | None = None) -> 
         return {"ok": False, "error": "no ticker"}
     company = idea["company"]
 
-    cur_price, as_of = await prices.current_price(ticker, company=company)
+    cur_price, as_of, currency = await prices.current_price(ticker, company=company)
     if cur_price is None:
         return {"ok": False, "error": "no current price"}
 
@@ -85,8 +85,8 @@ async def refresh_idea_performance(idea_id: int, db_path: str | None = None) -> 
     try:
         await conn.execute(
             """INSERT INTO performance (idea_id, current_price, as_of, return_pct,
-               price_at_ref, source) VALUES (?, ?, ?, ?, ?, ?)""",
-            (idea_id, cur_price, as_of, ret, ref_price, "yahoo"),
+               price_at_ref, source, currency) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (idea_id, cur_price, as_of, ret, ref_price, "yahoo", currency),
         )
         await conn.commit()
     finally:

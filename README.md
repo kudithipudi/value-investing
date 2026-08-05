@@ -106,6 +106,11 @@ listing page blocks bots, but PDFs are downloadable), or use the backfill button
   the stored company field is an informal name Yahoo's search doesn't index), the
   original price is kept rather than discarded — there's no evidence it's wrong, and
   silently returning "no data" for a real number would be worse.
+- Non-USD prices (e.g. a Madrid or Hong Kong listing) are shown in both their original
+  currency and a USD equivalent, converted via Yahoo's own FX pairs (`EURUSD=X`, etc.)
+  and cached for an hour. The `performance` table stores which currency `current_price`
+  was quoted in; `return_pct` itself needs no conversion since it's a ratio and both
+  sides of it always come from the same instrument.
 - Returns are approximate: reference price is the price stated in the pitch when given,
   else the price on the stated pitch date.
 - The "worked / partial / failed / inconclusive" verdict is time-aware: it weighs the

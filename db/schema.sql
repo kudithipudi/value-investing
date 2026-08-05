@@ -42,6 +42,11 @@ CREATE TABLE IF NOT EXISTS performance (
     return_pct REAL,
     source TEXT,
     price_at_ref REAL,
+    -- Currency current_price/price_at_ref were quoted in (e.g. "EUR" for a
+    -- Madrid listing), so the UI can show the original-currency price
+    -- alongside a USD conversion. NULL for rows written before this column
+    -- existed; app/db.py's migration adds it to any table missing it.
+    currency TEXT,
     fetched_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 );
 

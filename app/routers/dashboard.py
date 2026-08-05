@@ -232,6 +232,10 @@ async def idea_detail(idea_id: int, request: Request, db=Depends(get_db)):
         (idea_id,),
     )
     idea["performance"] = perf[0] if perf else None
+    if idea["performance"] and idea["performance"].get("currency"):
+        idea["performance"]["current_price_usd"] = await prices.convert_to_usd(
+            idea["performance"]["current_price"], idea["performance"]["currency"]
+        )
 
     # Re-running analysis inserts a new verdict row rather than replacing the
     # old one (so history isn't lost), so only the latest row per kind should
@@ -255,9 +259,15 @@ async def idea_detail(idea_id: int, request: Request, db=Depends(get_db)):
 
     ticker = idea.get("ticker")
     if ticker:
-        idea["price_cache"] = await prices.current_price(
+        price, as_of, currency = await prices.current_price(
             prices.format_ticker(ticker), company=idea.get("company")
         )
+        idea["price_cache"] = {
+            "price": price,
+            "as_of": as_of,
+            "currency": currency,
+            "usd_price": await prices.convert_to_usd(price, currency) if currency else None,
+        }
 
     prev_row = await db.execute_fetchall(
         "SELECT id, ticker, company FROM ideas WHERE issue_id = ? AND id < ? ORDER BY id DESC LIMIT 1",
