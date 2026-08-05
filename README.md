@@ -91,7 +91,12 @@ listing page blocks bots, but PDFs are downloadable), or use the backfill button
 ## Notes
 
 - Prices come from Yahoo Finance (`query1.finance.yahoo.com`) because stooq.com blocks
-  this server. No API key needed.
+  this server. No API key needed. Yahoo already covers most non-US exchanges (LSE, HKEX,
+  Tokyo, etc.) via a suffix on the symbol — the gap was resolving *which* suffix a bare
+  extracted ticker needs, not exchange coverage. When a bare ticker returns no data,
+  `app/services/prices.py` falls back to Yahoo's own symbol search keyed on the company
+  name, preferring a real primary/US-OTC listing over thin same-day German mirror
+  exchanges (which quote in EUR and aren't comparable to a USD reference price).
 - Returns are approximate: reference price is the price stated in the pitch when given,
   else the price on the stated pitch date.
 - Not investment advice.

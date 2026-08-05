@@ -247,7 +247,9 @@ async def idea_detail(idea_id: int, request: Request, db=Depends(get_db)):
 
     ticker = idea.get("ticker")
     if ticker:
-        idea["price_cache"] = await prices.current_price(prices.format_ticker(ticker))
+        idea["price_cache"] = await prices.current_price(
+            prices.format_ticker(ticker), company=idea.get("company")
+        )
 
     prev_row = await db.execute_fetchall(
         "SELECT id, ticker, company FROM ideas WHERE issue_id = ? AND id < ? ORDER BY id DESC LIMIT 1",

@@ -16,12 +16,14 @@ TEST_ADMIN_PASSWORD = "test-admin-password"
 
 @pytest.fixture(autouse=True)
 def _reset_price_cache():
-    """prices.py keeps an in-process TTL cache; tests must not leak across it."""
+    """prices.py keeps in-process caches; tests must not leak across them."""
     from app.services import prices
 
     prices._price_cache.clear()
+    prices._symbol_cache.clear()
     yield
     prices._price_cache.clear()
+    prices._symbol_cache.clear()
 
 
 @pytest.fixture

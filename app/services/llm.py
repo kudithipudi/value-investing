@@ -26,7 +26,11 @@ Your job: extract every investment IDEA mentioned, of two kinds:
   one-sentence rationale. Ignore purely historical references and companies named only for context.
 
 For each idea return a JSON object with these fields:
-{"ticker": "e.g. AAPL or null if unknown",
+{"ticker": "the ticker as Yahoo Finance would recognize it. If the company trades on a
+ non-US exchange, include Yahoo's exchange suffix when you can tell from the text (e.g.
+ RIO.L for London, 0700.HK for Hong Kong, 7203.T for Tokyo, BMW.DE for Frankfurt). For a US
+ dual-class share use a dot before the class letter (BRK.B). If you cannot tell the ticker
+ at all, use null.",
  "company": "official company name",
  "kind": "pitch" or "position",
  "direction": "long" | "short" | "long/short" | null,

@@ -60,7 +60,13 @@ def test_parse_json_bare():
 def test_format_ticker():
     from app.services.prices import format_ticker
     assert format_ticker("aapl.us") == "AAPL"
-    assert format_ticker("BRK.B") == "BRK"
+    # US dual-class shares use Yahoo's dash notation, not a dot.
+    assert format_ticker("BRK.B") == "BRK-B"
+    assert format_ticker("bf.b") == "BF-B"
+    # Real non-US exchange suffixes must be preserved, not stripped.
+    assert format_ticker("rio.l") == "RIO.L"
+    assert format_ticker("0700.hk") == "0700.HK"
+    assert format_ticker("7203.t") == "7203.T"
 
 
 def test_normalize_url():
@@ -129,6 +135,85 @@ async def test_prices_current_price_gives_up_on_404(fake_httpx):
     fake_httpx(handler)
     price, as_of = await prices.current_price("NOPE")
     assert price is None
+
+
+_SEARCH_MATCH = {
+    "quotes": [
+        {"symbol": "RIO.L", "shortname": "Rio Tinto Group", "quoteType": "EQUITY"},
+    ]
+}
+_SEARCH_NO_MATCH = {"quotes": []}
+
+
+_EMPTY_CHART = {"chart": {"result": [{"timestamp": [], "indicators": {"quote": [{"close": []}]}}]}}
+
+
+async def test_prices_current_price_resolves_via_company_search(fake_httpx):
+    """A bare ticker with no chart data falls back to a company-name search
+    for the correctly exchange-qualified symbol (e.g. a London listing)."""
+
+    def handler(request):
+        url = str(request.url)
+        if "/finance/search" in url:
+            return httpx.Response(200, json=_SEARCH_MATCH)
+        if "/chart/RIO.L" in url:
+            return httpx.Response(200, json=_CHART_OK)
+        return httpx.Response(200, json=_EMPTY_CHART)
+
+    fake_httpx(handler)
+    price, as_of = await prices.current_price("RIO", company="Rio Tinto Group")
+    assert price == 123.45
+
+
+async def test_prices_current_price_search_no_match_stays_none(fake_httpx):
+    def handler(request):
+        if "/finance/search" in str(request.url):
+            return httpx.Response(200, json=_SEARCH_NO_MATCH)
+        return httpx.Response(200, json=_EMPTY_CHART)
+
+    fake_httpx(handler)
+    price, as_of = await prices.current_price("XXXX", company="Some Untraceable Co")
+    assert price is None
+
+
+_SEARCH_MIRROR_AND_PRIMARY = {
+    "quotes": [
+        {"symbol": "GEB.MU", "shortname": "Bank of Georgia Group", "exchange": "MUN", "quoteType": "EQUITY"},
+        {"symbol": "BDGSF", "shortname": "Bank of Georgia Group", "exchange": "PNK", "quoteType": "EQUITY"},
+    ]
+}
+
+
+async def test_search_symbol_deprioritizes_mirror_exchanges(fake_httpx):
+    """A thin EUR-priced German mirror listing must lose to a USD-priced
+    listing, even if the mirror is ranked first by Yahoo's search — a mirror's
+    price isn't comparable to the USD reference price the newsletter states."""
+
+    def handler(request):
+        return httpx.Response(200, json=_SEARCH_MIRROR_AND_PRIMARY)
+
+    fake_httpx(handler)
+    resolved = await prices._search_symbol("Bank of Georgia Group")
+    assert resolved == "BDGSF"
+
+
+async def test_prices_search_symbol_is_cached(fake_httpx):
+    calls = {"search": 0}
+
+    def handler(request):
+        url = str(request.url)
+        if "/finance/search" in url:
+            calls["search"] += 1
+            return httpx.Response(200, json=_SEARCH_MATCH)
+        if "/chart/RIO.L" in url:
+            return httpx.Response(200, json=_CHART_OK)
+        return httpx.Response(200, json=_EMPTY_CHART)
+
+    fake_httpx(handler)
+    await prices.current_price("RIO", company="Rio Tinto Group")
+    prices._price_cache.clear()  # force a second real lookup, but symbol should be cached
+    await prices.current_price("RIO", company="Rio Tinto Group")
+    assert calls["search"] == 1
 
 
 async def test_llm_chat_json_retries_then_succeeds(fake_httpx, monkeypatch):

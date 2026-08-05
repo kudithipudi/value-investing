@@ -59,8 +59,9 @@ async def refresh_idea_performance(idea_id: int, db_path: str | None = None) -> 
     ticker = prices.format_ticker(idea["ticker"]) if idea["ticker"] else None
     if not ticker:
         return {"ok": False, "error": "no ticker"}
+    company = idea["company"]
 
-    cur_price, as_of = await prices.current_price(ticker)
+    cur_price, as_of = await prices.current_price(ticker, company=company)
     if cur_price is None:
         return {"ok": False, "error": "no current price"}
 
@@ -69,7 +70,7 @@ async def refresh_idea_performance(idea_id: int, db_path: str | None = None) -> 
     pitch_day = parse_pitch_date(idea["pitch_date"]) if ref_price is None else None
     if ref_price is None and pitch_day:
         try:
-            ref_price = await prices.price_at(ticker, pitch_day)
+            ref_price = await prices.price_at(ticker, pitch_day, company=company)
         except Exception:  # noqa: BLE001
             ref_price = None
 
