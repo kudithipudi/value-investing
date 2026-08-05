@@ -99,4 +99,12 @@ listing page blocks bots, but PDFs are downloadable), or use the backfill button
   exchanges (which quote in EUR and aren't comparable to a USD reference price).
 - Returns are approximate: reference price is the price stated in the pitch when given,
   else the price on the stated pitch date.
+- The "worked / partial / failed / inconclusive" verdict is time-aware: it weighs the
+  interim return against the thesis's *own* stated horizon (e.g. "3-year target"), not
+  against how much time has passed in absolute terms. A pitch judged shortly after
+  publication with a multi-year target correctly comes back "inconclusive" rather than a
+  premature "failed" off a few months of normal price noise. Re-running analysis (the
+  issue page's "Analyze ideas", or `scripts/backfill.py --analyze`) recomputes verdicts
+  with whatever the current verdict logic is, so periodically re-running the most
+  recently published issue keeps its "inconclusive" verdicts current as time passes.
 - Not investment advice.

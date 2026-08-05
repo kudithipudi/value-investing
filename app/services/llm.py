@@ -45,8 +45,9 @@ Return ONLY a JSON object: {"ideas": [ <idea objects as described> ]}.
 If there are no ideas in the given text, return {"ideas": []}."""
 
 _VERDICT_SYSTEM = """You are an investment analyst evaluating whether a past stock pitch "worked".
-You will be given a pitch thesis (long or short) and, where available, its actual price performance.
-Decide whether the thesis played out, partially played out, or failed.
+You will be given a pitch thesis (long or short), how much time has elapsed since the pitch, and
+where available, its actual price performance. Decide whether the thesis played out, partially
+played out, or failed.
 
 Return ONLY a JSON object:
 {"verdict": "worked" | "partial" | "failed" | "inconclusive",
@@ -56,6 +57,14 @@ Return ONLY a JSON object:
 Rules:
 - If price data is provided, weigh return direction against the stated direction (long vs short).
 - If no price data, base the verdict on whether the thesis events occurred; mark confidence low.
+- Weigh the interim return against the thesis's OWN stated horizon, not against how much time has
+  passed in absolute terms. If the thesis states a multi-year target (e.g. "3-year target",
+  "over the next 2 years") and less than half of that horizon has elapsed, a modest interim
+  return — positive or negative, well short of the stated target — is normal noise, not a result.
+  Use "inconclusive" (confidence "low") in that case rather than "worked" or "failed", unless a
+  specific catalyst or fact in the thesis has clearly already played out or been invalidated.
+- Only use "worked" or "failed" with "high" confidence when either most of the stated horizon has
+  elapsed, or something in the thesis has been decisively confirmed or broken regardless of time.
 - Do not fabricate facts. If you cannot tell, use "inconclusive"."""
 
 _BEST_PICK_SYSTEM = """You are a value-investing analyst. Given the fresh investment ideas from the most recent
@@ -133,8 +142,17 @@ async def extract_ideas(text: str) -> list[dict]:
     return []
 
 
-async def judge_idea(thesis: str, direction: str | None, return_pct: float | None) -> dict | None:
+async def judge_idea(
+    thesis: str,
+    direction: str | None,
+    return_pct: float | None,
+    months_elapsed: float | None = None,
+) -> dict | None:
     user = f"Direction: {direction or 'unknown'}\nThesis:\n{thesis[:4000]}"
+    if months_elapsed is not None:
+        user += f"\nTime elapsed since the pitch: {months_elapsed:.0f} months"
+    else:
+        user += "\nTime elapsed since the pitch: unknown"
     if return_pct is not None:
         user += f"\nPrice performance since pitch: {return_pct:+.1f}%"
     else:

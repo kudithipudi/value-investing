@@ -83,6 +83,41 @@ async def test_issue_detail_200(client, tmp_path):
     assert resp.status_code == 200
 
 
+async def test_idea_detail_shows_only_latest_verdict(client, tmp_path):
+    """Re-running analysis inserts a new verdict row rather than replacing
+    the old one; the page must show only the latest, not both stacked."""
+    db_path = tmp_path / "app-test.db"
+    await init_db(str(db_path))
+    conn = await connect(str(db_path))
+    await conn.execute(
+        "INSERT INTO issues (source_url, title, status) VALUES ('http://x/4.pdf', 'T4', 'parsed')"
+    )
+    await conn.commit()
+    issue_id = (await conn.execute_fetchall("SELECT last_insert_rowid() AS id"))[0]["id"]
+    await conn.execute(
+        "INSERT INTO ideas (issue_id, kind, ticker, company, direction, thesis) "
+        "VALUES (?, 'pitch', 'ACME', 'Acme Corp', 'long', 'thesis')",
+        (issue_id,),
+    )
+    await conn.commit()
+    idea_id = (await conn.execute_fetchall("SELECT last_insert_rowid() AS id"))[0]["id"]
+    await conn.execute(
+        "INSERT INTO llm_verdicts (idea_id, kind, content) VALUES (?, 'verdict', ?)",
+        (idea_id, '{"verdict": "failed", "explanation": "stale premature judgement"}'),
+    )
+    await conn.execute(
+        "INSERT INTO llm_verdicts (idea_id, kind, content) VALUES (?, 'verdict', ?)",
+        (idea_id, '{"verdict": "inconclusive", "explanation": "corrected judgement"}'),
+    )
+    await conn.commit()
+    await conn.close()
+
+    resp = client.get(f"/ideas/{idea_id}")
+    assert resp.status_code == 200
+    assert "corrected judgement" in resp.text
+    assert "stale premature judgement" not in resp.text
+
+
 async def test_admin_ingest_requires_url(client):
     resp = client.post("/admin/ingest")
     assert resp.status_code in (400, 307)

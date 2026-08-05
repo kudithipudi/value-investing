@@ -94,6 +94,17 @@ async def refresh_idea_performance(idea_id: int, db_path: str | None = None) -> 
     return {"ok": True, "return_pct": ret, "current_price": cur_price, "as_of": as_of}
 
 
+def months_since_pitch(pitch_date_raw: str | None) -> float | None:
+    """How many months have elapsed since a pitch, for the verdict prompt —
+    without this, a fresh pitch with a multi-year target horizon gets judged
+    "failed" off a few months of noise (see judge_idea's verdict rules)."""
+    pitch_day = parse_pitch_date(pitch_date_raw)
+    if pitch_day is None:
+        return None
+    days = (datetime.now(timezone.utc).date() - pitch_day).days
+    return days / 30.44
+
+
 async def judge_idea_verdict(idea_id: int, db_path: str | None = None) -> dict:
     """Run the LLM verdict for one idea and store it in llm_verdicts (kind='verdict')."""
     conn = await connect(db_path)
@@ -107,7 +118,8 @@ async def judge_idea_verdict(idea_id: int, db_path: str | None = None) -> dict:
         await conn.close()
 
     ret = perf[0]["return_pct"] if perf else None
-    verdict = await llm.judge_idea(idea["thesis"] or "", idea["direction"], ret)
+    months_elapsed = months_since_pitch(idea["pitch_date"])
+    verdict = await llm.judge_idea(idea["thesis"] or "", idea["direction"], ret, months_elapsed)
     if not verdict:
         return {"ok": False, "error": "LLM returned nothing"}
     if "verdict" in verdict:

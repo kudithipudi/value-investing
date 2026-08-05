@@ -100,7 +100,7 @@ async def _latest_picks(conn):
         return None
     issue = dict(rows[0])
     picks_rows = await conn.execute_fetchall(
-        """SELECT lv.content, i.ticker, i.company, i.kind, i.direction
+        """SELECT lv.content, i.id AS idea_id, i.ticker, i.company, i.kind, i.direction
            FROM llm_verdicts lv
            JOIN ideas i ON i.id = lv.idea_id
            WHERE lv.kind = 'best_pick' AND i.issue_id = ?
@@ -113,7 +113,7 @@ async def _latest_picks(conn):
             content = json.loads(row["content"])
         except json.JSONDecodeError:
             continue
-        picks.append({"ticker": row["ticker"], "company": row["company"], **content})
+        picks.append({"idea_id": row["idea_id"], "ticker": row["ticker"], "company": row["company"], **content})
     picks.sort(key=lambda p: p.get("score", 0), reverse=True)
     issue["picks"] = picks
     return issue
@@ -233,9 +233,17 @@ async def idea_detail(idea_id: int, request: Request, db=Depends(get_db)):
     )
     idea["performance"] = perf[0] if perf else None
 
+    # Re-running analysis inserts a new verdict row rather than replacing the
+    # old one (so history isn't lost), so only the latest row per kind should
+    # be shown here — otherwise a corrected verdict displays stacked on top
+    # of the stale one it superseded.
     verdicts = await _fetch_json(
         db,
-        "SELECT kind, content FROM llm_verdicts WHERE idea_id = ? ORDER BY id",
+        """SELECT kind, content FROM llm_verdicts lv
+           WHERE idea_id = ? AND id = (
+             SELECT MAX(id) FROM llm_verdicts WHERE idea_id = lv.idea_id AND kind = lv.kind
+           )
+           ORDER BY id""",
         (idea_id,),
     )
     idea["verdicts"] = []
